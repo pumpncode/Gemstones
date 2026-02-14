@@ -5,9 +5,9 @@ function Gemstones.can_use_gemstone_consumeable(self, card)
 	if sticker_info.card_compat and sticker_info.joker_compat then
 		return (#G.jokers.highlighted + #G.hand.highlighted) == (self.config.max_highlighted or 1) and ((Gemstones.get_gemslot(G.jokers.highlighted[1]) ~= nil or Gemstones.get_gemslot(G.hand.highlighted[1])) ~= nil)
 	elseif not sticker_info.card_compat and sticker_info.joker_compat then
-		return  #G.jokers.highlighted <= self.config.max_highlighted and Gemstones.get_gemslot(G.jokers.highlighted[1]) ~= nil 
+		return  #G.jokers.highlighted <= self.config.max_highlighted and Gemstones.get_gemslot(G.jokers.highlighted[1]) ~= nil
 	elseif sticker_info.card_compat and not sticker_info.joker_compat then
-		return  #G.hand.highlighted == self.config.max_highlighted and Gemstones.get_gemslot(G.hand.highlighted[1]) ~= nil 
+		return  #G.hand.highlighted == self.config.max_highlighted and Gemstones.get_gemslot(G.hand.highlighted[1]) ~= nil
 	end
 end
 
@@ -25,7 +25,7 @@ function Gemstones.use_gemstone_consumeable(self, card, area, copier)
 				func = function()
 					Gemstones.set_gemslot(highlighted, self.config.sticker_id)
 					highlighted:juice_up(0.5, 0.5)
-		
+
 					card:juice_up(0.5, 0.5)
 					play_sound('gold_seal', 1.2, 0.4)
 					return true
@@ -43,7 +43,7 @@ function Gemstones.use_gemstone_consumeable(self, card, area, copier)
 				func = function()
 					Gemstones.set_gemslot(highlighted, self.config.sticker_id)
 					highlighted:juice_up(0.5, 0.5)
-		
+
 					card:juice_up(0.5, 0.5)
 					play_sound('gold_seal', 1.2, 0.4)
 					return true
@@ -74,7 +74,7 @@ end
 -- Check for gemstone
 function Gemstones.get_gemslot(card)
     if not card then return nil end
-    
+
     for k, v in pairs(card.ability) do
         if string.find(k, "gemslot") then
             return k
@@ -82,28 +82,31 @@ function Gemstones.get_gemslot(card)
     end
 end
 
---- HOOKS ---
+-- Get a tally for cards with a Gemstone Slot in a given area
+function Gemstones.get_area_slot_tally(area, unique_only, ignore_list)
+	local slot_tally = 0
+	local found = ignore_list or {}
 
--- Deal with modified probabilities
-local gems_evalcard = eval_card
-function eval_card(card, context)
-	if not card or card.will_shatter then return end
-    
-	local game_probs = G.GAME.probabilities.normal
-	if card.ability.gemslot_citrine then G.GAME.probabilities.normal = game_probs + 1 end
+	for i = 1, #area do
+        local c = area[i]
+        for k, v in pairs(c.ability) do if string.find(k, "gemslot") and k ~= "gemslot_empty" and not found[k] then
+            slot_tally = slot_tally + 1
+			if unique_only then found[k] = true end
+        end end
+    end
 
-	local ret, ret2 = gems_evalcard(card, context)
-	if card.ability.gemslot_citrine then G.GAME.probabilities.normal = game_probs end
-	return ret, ret2
+	return slot_tally, found
 end
 
--- Add random chance of a Gem Slot
+--- HOOKS ---
+
+-- Add random chance of a Gemstone Slot
 local common_events_create_card = create_card
 function create_card(_type, area, legendary, _rarity, skip_materialize, soulable, forced_key, key_append)
 	local _card = common_events_create_card(_type, area, legendary, _rarity, skip_materialize, soulable, forced_key, key_append)
 
     if area == G.pack_cards and _card.base.id then
-		if pseudorandom(pseudoseed("booster_gemstone")) < G.GAME.probabilities.normal / 10 then
+		if pseudorandom(pseudoseed("booster_gemstone")) < 1/10 then --Or should it be SMODS.pseudorandom_probability({}, "booster_gemstone", 1, 10, "booster_gemstone")? Was this meant to be affected by oops? Assuming not for the moment; may revert later.
 			Gemstones.set_gemslot(_card, pseudorandom_element(Gemstones.pools.cards, pseudoseed("booster_gemstone")))
 			G.E_MANAGER:add_event(Event({
 				trigger = 'after',
@@ -139,11 +142,10 @@ function Back.apply_to_run(self)
 end
 
 -- Last used Gemstone card
-local igo = Game.init_game_object
-Game.init_game_object = function(self)
-  	local ret = igo(self)
-  	ret.last_used_gemstone = nil
-  	return ret
+SMODS.current_mod.reset_game_globals = function(init)
+	if init then
+		G.GAME.last_used_gemstone = nil
+	end
 end
 
 -- Localization colors
@@ -152,7 +154,7 @@ function loc_colour(_c, _default)
 	if not G.ARGS.LOC_COLOURS then
 		lc()
 	end
-	
+
 	for k, v in pairs(SMODS.Stickers) do
 		local sticker = SMODS.Stickers[k]
 		G.ARGS.LOC_COLOURS[string.gsub(sticker.key, "gemslot_", "")] = sticker.badge_colour
@@ -161,14 +163,10 @@ function loc_colour(_c, _default)
 end
 
 -- Card debuff for Sapphire
-local Cardset_debufff = Card.set_debuff
-function Card:set_debuff(should_debuff)
-	if self.ability.gemslot_sapphire then
-		self.debuff = false
-		return
-	else
-		Cardset_debufff(self, should_debuff)
-	end
+SMODS.current_mod.set_debuff = function (card)
+  if card.ability.gemslot_sapphire then
+     return "prevent_debuff"
+  end
 end
 
 -- Override Talisman function
@@ -180,20 +178,10 @@ function Card:get_chip_x_bonus()
 end
 
 -- Card suit for Sapphire
-local Cardis_suit = Card.is_suit
-function Card:is_suit(suit, bypass_debuff, flush_calc)
-	if flush_calc then
-		if self.ability.gemslot_sapphire and not self.debuff then
-			return true
-		end
-		return Cardis_suit(self, suit, bypass_debuff, flush_calc)
-	else
-		if self.debuff and not bypass_debuff then return end
-		if self.ability.gemslot_sapphire then
-			return true
-		end
-		return Cardis_suit(self, suit, bypass_debuff, flush_calc)
-	end
+local smodsanysuit = SMODS.has_any_suit
+SMODS.has_any_suit = function (card)
+	if card.ability.gemslot_sapphire then return true end
+	if smodsanysuit(card) then return true end
 end
 
 -- Spawn same rarity Joker for Obsidian
@@ -278,7 +266,7 @@ function inc_joker_value(self, multi, reset)
 
         local possibleKeys={'bonus','h_mult','mult','t_mult','h_dollars','x_mult','x_chips','extra_value','h_size','perma_bonus','p_dollars','h_x_mult','t_chips','d_size'}
         local self_ability=self.ability
-		
+
         for k, v in pairs(possibleKeys) do
             if self_ability[v] then
 				if (v == "x_chips" or v == "x_mult" or v == "h_x_mult") and self_ability[v] > 1 then
@@ -286,7 +274,7 @@ function inc_joker_value(self, multi, reset)
 				elseif not (v == "x_chips" or v == "x_mult" or v == "h_x_mult") and self_ability[v] ~= 0 then
 					self_ability[v]=self_ability[v]*multi
 				end
-				
+
             end
         end
         if self_ability.extra then
@@ -394,7 +382,7 @@ function G.UIDEF.use_and_sell_buttons(card)
 	return G_UIDEF_use_and_sell_buttons_ref(card)
 end
 
--- Create UI for Gem Slots
+-- Create UI for Gemstone Slots
 function create_UIBox_gemslots()
 	local _pool = {}
 	for i, v in pairs(SMODS.Stickers) do
@@ -462,7 +450,7 @@ G.FUNCS.reserve_card = function(e)
 	}))
 end
 
--- For Gem Slot collection UI
+-- For Gemstone Slot collection UI
 G.FUNCS.your_collection_gemslot = function()
 	G.SETTINGS.paused = true
 	G.FUNCS.overlay_menu{
@@ -472,7 +460,7 @@ end
 
 --- SMODS ---
 
--- Override function to remove Gem Slots from the pool
+-- Override function to remove Gemstone Slots from the pool
 create_UIBox_your_collection_stickers = function()
 	local _pool = {}
 	for i, v in pairs(SMODS.Stickers) do
@@ -495,15 +483,15 @@ create_UIBox_your_collection_stickers = function()
     })
 end
 
--- Gem Slots Collection Tab
+-- Gemstone Slots Collection Tab
 Gemstones.custom_collection_tabs = function()
     return {
         UIBox_button({
-			button = 'your_collection_gemslot', 
-			label = {'Gem Slots'}, 
+			button = 'your_collection_gemslot',
+			label = {'Gemstone Slots'},
 			minw = 5,
-			minh = 1, 
-			id = 'your_collection_gemslot', 
+			minh = 1,
+			id = 'your_collection_gemslot',
 			focus_args = {snap_to = true}
 		})
     }
@@ -551,7 +539,7 @@ Gemstones.extra_tabs = function()
                 {
                     n = G.UIT.T,
                     config = {
-                    text = "Contributors: AlexZGreat, Dragokillfist",
+                    text = "Contributors: AlexZGreat, Dragokillfist, wingedcatgirl",
                     shadow = true,
                     scale = scale*0.8,
                     colour = G.C.GREEN
